@@ -1,6 +1,6 @@
-.git
 node_modules
 .next
-.env
-.env.local
+.git
+.env*
+.claude
 *.md

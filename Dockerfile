@@ -1,40 +1,51 @@
-FROM node:20-slim
-
-# Install Chromium and Hebrew font support for Puppeteer
-RUN apt-get update && apt-get install -y \
-  chromium \
-  fonts-freefont-ttf \
-  fonts-noto \
-  ca-certificates \
-  --no-install-recommends \
-  && rm -rf /var/lib/apt/lists/*
-
-# Tell Puppeteer to use the system Chromium (not download its own)
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-ENV PUPPETEER_SKIP_DOWNLOAD=true
-
+# ── Stage 1: install dependencies ──────────────────────────────────────────
+FROM node:20-alpine AS deps
 WORKDIR /app
 
-# Copy package files and prisma config
-COPY package*.json ./
-COPY prisma ./prisma/
-COPY prisma.config.ts ./
+COPY package.json package-lock.json ./
+COPY prisma ./prisma
 
-# Install all dependencies (skip puppeteer browser download)
-RUN PUPPETEER_SKIP_DOWNLOAD=true npm ci
+RUN npm ci
 
-# Generate Prisma client
-RUN npx prisma generate
+# ── Stage 2: build ──────────────────────────────────────────────────────────
+FROM node:20-alpine AS builder
+WORKDIR /app
 
-# Copy source
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build Next.js
+# Generate Prisma client for linux (needed at runtime)
+RUN npx prisma generate
+
 RUN npm run build
 
-EXPOSE 3000
-ENV PORT=3000
+# ── Stage 3: production image ───────────────────────────────────────────────
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+# Non-root user for security
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+# Copy standalone build output
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
+
+# Copy Prisma schema + generated client (needed for migrations at startup)
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder /app/app/generated ./app/generated
+
+USER nextjs
+
+# Cloud Run sets PORT env var; Next.js standalone reads it automatically
+EXPOSE 8080
+ENV PORT=8080
 ENV HOSTNAME="0.0.0.0"
 
-CMD ["npm", "start"]
+# Run migrations then start the app
+CMD ["sh", "-c", "node_modules/.bin/prisma migrate deploy && node server.js"]
