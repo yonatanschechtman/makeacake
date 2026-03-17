@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@theme {
+  --font-rubik: var(--font-rubik), "Arial Hebrew", Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-rubik, "Arial Hebrew", Arial, sans-serif);
+}
+
+/* RTL flip for directional icons (arrows, chevrons) */
+[dir="rtl"] .rtl-flip {
+  transform: scaleX(-1);
+}
