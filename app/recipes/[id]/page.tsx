@@ -4,6 +4,7 @@ import { useEffect, useState, use } from "react";
 import { useRouter } from "next/navigation";
 import BottomNav from "@/components/BottomNav";
 import type { Recipe, IngredientPrice, Setting } from "@/types";
+import { convertToBaseUnit } from "@/lib/units";
 
 function formatCurrency(n: number) {
   return `₪${n.toFixed(2)}`;
@@ -29,6 +30,9 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
   const [pricesLastUpdated, setPricesLastUpdated] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
+  const [editingIngredientId, setEditingIngredientId] = useState<number | null>(null);
+  const [editQty, setEditQty] = useState("");
+  const [editUnit, setEditUnit] = useState("");
 
   useEffect(() => {
     Promise.all([
@@ -105,15 +109,30 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
     );
   }
 
-  // Cost calculation
+  // Cost calculation with unit conversion
   const prepHours = prepTime / 60;
   let ingredientCost = 0;
-  for (const ing of recipe.ingredients) {
-    const price = prices[ing.name];
-    if (price) {
-      ingredientCost += ing.quantity * multiplier * price.pricePerUnit;
-    }
+
+  interface IngredientLine {
+    id: number;
+    name: string;
+    quantity: number;
+    unit: string;
+    cost: number | null;
+    conversionNote?: string;
   }
+  const ingredientLines: IngredientLine[] = recipe.ingredients.map((ing) => {
+    const price = prices[ing.name];
+    if (!price) return { ...ing, cost: null };
+    const effectivePrice = price.userPrice ?? price.pricePerUnit;
+    const conv = convertToBaseUnit(ing.quantity * multiplier, ing.unit, price.unit, price.density);
+    if (!conv.possible) {
+      return { ...ing, cost: null, conversionNote: conv.reason };
+    }
+    const cost = conv.converted * effectivePrice;
+    ingredientCost += cost;
+    return { ...ing, cost };
+  });
 
   let laborCost = 0;
   let infraCost = 0;
@@ -131,6 +150,35 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
   const totalCost = ingredientCost + laborCost + infraCost + fixedCost;
 
   const missingPrices = recipe.ingredients.filter((i) => !prices[i.name]);
+  const conversionWarnings = ingredientLines.filter((l) => l.cost === null && prices[l.name]);
+
+  const startEdit = (ing: IngredientLine) => {
+    setEditingIngredientId(ing.id);
+    setEditQty(String(ing.quantity));
+    setEditUnit(ing.unit);
+  };
+
+  const cancelEdit = () => setEditingIngredientId(null);
+
+  const saveEdit = async (ingId: number) => {
+    const qty = parseFloat(editQty);
+    if (isNaN(qty) || qty <= 0) return;
+    await fetch(`/api/recipes/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ingredientId: ingId, quantity: qty, unit: editUnit }),
+    });
+    setRecipe((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        ingredients: prev.ingredients.map((i) =>
+          i.id === ingId ? { ...i, quantity: qty, unit: editUnit } : i
+        ),
+      };
+    });
+    setEditingIngredientId(null);
+  };
 
   return (
     <div className="min-h-screen bg-amber-50 pb-24">
@@ -216,10 +264,9 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
           )}
 
           <div className="space-y-0">
-            {recipe.ingredients.map((ing) => {
+            {ingredientLines.map((ing) => {
               const price = prices[ing.name];
               const qty = ing.quantity * multiplier;
-              const cost = price ? qty * price.pricePerUnit : null;
 
               return (
                 <div key={ing.id} className="flex items-center py-2.5 border-b border-gray-50 last:border-0 gap-2">
@@ -227,15 +274,57 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
                     <p className="text-sm font-medium text-gray-800 truncate">{ing.name}</p>
                     {price && (
                       <p className="text-xs text-gray-400">
-                        {formatCurrency(price.pricePerUnit)}/{price.unit}
+                        {price.userPrice != null ? (
+                          <span className="text-amber-600">✎ {formatCurrency(price.userPrice)}/{price.unit}</span>
+                        ) : (
+                          <span>{formatCurrency(price.pricePerUnit)}/{price.unit}</span>
+                        )}
+                      </p>
+                    )}
+                    {ing.conversionNote && (
+                      <p className="text-xs text-orange-500 truncate" title={ing.conversionNote}>
+                        ⚠ {ing.conversionNote}
                       </p>
                     )}
                   </div>
-                  <div className="text-sm text-gray-600 shrink-0">
-                    {qty % 1 === 0 ? qty : qty.toFixed(2)} {ing.unit}
-                  </div>
+                  {editingIngredientId === ing.id ? (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <input
+                        type="number"
+                        value={editQty}
+                        onChange={(e) => setEditQty(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") saveEdit(ing.id); if (e.key === "Escape") cancelEdit(); }}
+                        className="w-16 border border-amber-400 rounded-lg px-2 py-1 text-sm text-center focus:outline-none"
+                        autoFocus
+                      />
+                      <input
+                        type="text"
+                        value={editUnit}
+                        onChange={(e) => setEditUnit(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") saveEdit(ing.id); if (e.key === "Escape") cancelEdit(); }}
+                        className="w-14 border border-amber-400 rounded-lg px-2 py-1 text-sm text-center focus:outline-none"
+                      />
+                      <button onClick={() => saveEdit(ing.id)} className="text-green-600 hover:text-green-800 text-xs font-bold px-1">✓</button>
+                      <button onClick={cancelEdit} className="text-gray-400 hover:text-gray-600 text-xs px-1">✕</button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1 text-sm text-gray-600 shrink-0">
+                      <span>{qty % 1 === 0 ? qty : qty.toFixed(2)} {ing.unit}</span>
+                      <button
+                        onClick={() => startEdit(ing)}
+                        className="text-gray-300 hover:text-amber-500 transition-colors p-0.5"
+                        title="ערוך כמות"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
                   <div className="text-sm font-semibold text-amber-700 w-16 text-left shrink-0">
-                    {cost !== null ? formatCurrency(cost) : (
+                    {ing.cost !== null ? formatCurrency(ing.cost) : ing.conversionNote ? (
+                      <span className="text-orange-400 text-xs">⚠</span>
+                    ) : (
                       <span className="text-gray-300 text-xs">אין מחיר</span>
                     )}
                   </div>
@@ -247,6 +336,11 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
           {missingPrices.length > 0 && (
             <p className="text-xs text-gray-400 mt-3">
               {missingPrices.length} מרכיבים ללא מחיר. לחץ &#34;רענן מחירים&#34; לעדכון.
+            </p>
+          )}
+          {conversionWarnings.length > 0 && (
+            <p className="text-xs text-orange-500 mt-1">
+              ⚠ {conversionWarnings.length} מרכיבים דורשים צפיפות להמרת יחידות (הגדר בדף המחירים)
             </p>
           )}
         </div>

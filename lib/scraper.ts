@@ -1,5 +1,3 @@
-import puppeteer from "puppeteer";
-
 export interface PriceResult {
   ingredientName: string;
   pricePerUnit: number | null;
@@ -9,102 +7,70 @@ export interface PriceResult {
   error?: string;
 }
 
-// Unit normalization map (Hebrew → base unit)
-const UNIT_MULTIPLIERS: Record<string, { base: string; factor: number }> = {
-  "ק\"ג": { base: "גרם", factor: 1000 },
-  "קילוגרם": { base: "גרם", factor: 1000 },
-  "ליטר": { base: "מ\"ל", factor: 1000 },
-  "גרם": { base: "גרם", factor: 1 },
-  "מ\"ל": { base: "מ\"ל", factor: 1 },
-  "מל": { base: "מ\"ל", factor: 1 },
+// Rami Levy UOM → base unit and gram/ml factor
+const UOM_MAP: Record<string, { base: string; factor: number }> = {
+  "קג":  { base: "גרם",  factor: 1000 },
+  'ק"ג': { base: "גרם",  factor: 1000 },
+  "גר":  { base: "גרם",  factor: 1 },
+  "גרם": { base: "גרם",  factor: 1 },
+  "ל":   { base: 'מ"ל',  factor: 1000 },
+  "ליטר":{ base: 'מ"ל',  factor: 1000 },
+  "מל":  { base: 'מ"ל',  factor: 1 },
+  'מ"ל': { base: 'מ"ל',  factor: 1 },
 };
 
+interface RamiLevyProduct {
+  name: string;
+  price: { price: number };
+  gs?: {
+    Net_Content?: {
+      UOM?: string;
+      value?: string;
+      text?: string;
+    };
+  };
+  prop?: {
+    by_kilo_content?: number;
+  };
+}
+
 export async function fetchIngredientPrice(ingredientName: string): Promise<PriceResult> {
-  let browser;
   try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--no-first-run",
-        "--no-zygote",
-      ],
+    const url = `https://www.rami-levy.co.il/api/search?q=${encodeURIComponent(ingredientName)}`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
+      signal: AbortSignal.timeout(10000),
     });
 
-    const page = await browser.newPage();
-    await page.setUserAgent(
-      "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Mobile Safari/537.36"
-    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    const searchUrl = `https://chp.co.il/main/search/${encodeURIComponent(ingredientName)}`;
-    await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 30000 });
+    const json = await res.json() as { data: RamiLevyProduct[]; total: number };
 
-    // Extract first product result
-    const result = await page.evaluate(() => {
-      // Try various selectors that chp.co.il may use
-      const productCards = document.querySelectorAll(
-        ".product-item, .item-card, [class*='product'], [class*='item']"
-      );
-
-      for (const card of Array.from(productCards)) {
-        const priceEl = card.querySelector("[class*='price'], .price");
-        const nameEl = card.querySelector("[class*='name'], .name, h3, h4");
-        const unitEl = card.querySelector("[class*='unit'], .unit, [class*='weight']");
-
-        if (priceEl) {
-          const priceText = priceEl.textContent?.trim() || "";
-          const nameText = nameEl?.textContent?.trim() || "";
-          const unitText = unitEl?.textContent?.trim() || "";
-
-          return { priceText, nameText, unitText };
-        }
-      }
-
-      // Fallback: look for any price-like text on page
-      const allText = document.body.innerText;
-      return { allText: allText.slice(0, 2000), priceText: "", nameText: "", unitText: "" };
-    });
-
-    // Parse price from text (e.g. "₪8.90" or "8.90 ₪")
-    const priceMatch = result.priceText.match(/[\d.,]+/);
-    const price = priceMatch ? parseFloat(priceMatch[0].replace(",", ".")) : null;
-
-    // Determine package info and normalize to per-unit
-    let pricePerUnit: number | null = null;
-    let unit: string | null = null;
-    let packageInfo: string | null = null;
-
-    if (price !== null && result.unitText) {
-      packageInfo = result.unitText;
-      // Try to find weight/volume in unit string
-      const weightMatch = result.unitText.match(/([\d.,]+)\s*(ק"ג|קילוגרם|גרם|ליטר|מ"ל|מל)/);
-      if (weightMatch) {
-        const qty = parseFloat(weightMatch[1].replace(",", "."));
-        const unitKey = weightMatch[2];
-        const norm = UNIT_MULTIPLIERS[unitKey];
-        if (norm) {
-          pricePerUnit = price / (qty * norm.factor);
-          unit = norm.base;
-        }
-      } else {
-        pricePerUnit = price;
-        unit = "יחידה";
-      }
-    } else if (price !== null) {
-      pricePerUnit = price;
-      unit = "יחידה";
+    if (!json.data || json.data.length === 0) {
+      return { ingredientName, pricePerUnit: null, unit: null, packageInfo: null, supermarket: "rami-levy.co.il" };
     }
 
-    return {
-      ingredientName,
-      pricePerUnit,
-      unit,
-      packageInfo,
-      supermarket: "chp.co.il",
-    };
+    const product = json.data[0];
+    const price = product.price?.price;
+    const netContent = product.gs?.Net_Content;
+    const uom = netContent?.UOM?.trim() ?? "";
+    const qty = parseFloat(netContent?.value ?? "1") || 1;
+    const packageInfo = `${product.name} (${netContent?.text ?? ""})`;
+
+    const norm = UOM_MAP[uom];
+    let pricePerUnit: number | null = null;
+    let unit: string | null = null;
+
+    if (price != null && norm) {
+      pricePerUnit = price / (qty * norm.factor);
+      unit = norm.base;
+    } else if (price != null) {
+      // Unknown unit — store price per package unit
+      pricePerUnit = price / qty;
+      unit = uom || "יחידה";
+    }
+
+    return { ingredientName, pricePerUnit, unit, packageInfo, supermarket: "rami-levy.co.il" };
   } catch (err) {
     return {
       ingredientName,
@@ -114,13 +80,10 @@ export async function fetchIngredientPrice(ingredientName: string): Promise<Pric
       supermarket: null,
       error: err instanceof Error ? err.message : "Unknown error",
     };
-  } finally {
-    if (browser) await browser.close();
   }
 }
 
 export async function fetchMultiplePrices(ingredientNames: string[]): Promise<PriceResult[]> {
-  // Fetch sequentially to avoid overloading the target site
   const results: PriceResult[] = [];
   for (const name of ingredientNames) {
     const result = await fetchIngredientPrice(name);

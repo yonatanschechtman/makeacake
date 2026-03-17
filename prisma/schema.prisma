@@ -32,13 +32,19 @@ model RecipeIngredient {
 }
 
 model IngredientPrice {
-  id             Int      @id @default(autoincrement())
-  ingredientName String   @unique
-  pricePerUnit   Float
-  unit           String
-  packageInfo    String?
-  supermarket    String?
-  lastUpdated    DateTime @default(now())
+  id               Int      @id @default(autoincrement())
+  ingredientName   String   @unique
+  pricePerUnit     Float    @default(0)
+  userPrice        Float?
+  userPackagePrice Float?
+  userPackageSize  Float?
+  userPackageUnit  String?
+  unit             String   @default("יחידה")
+  packageInfo      String?
+  supermarket      String?
+  lastUpdated      DateTime @default(now())
+  density          Float?   // grams per ml; null = unknown. Used to convert כף/כפית/כוס ↔ גרם
+  aliasOf          String?  // if set, points to a canonical ingredientName; one level only
 }
 
 model Setting {

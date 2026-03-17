@@ -25,10 +25,16 @@ export interface IngredientPrice {
   id: number;
   ingredientName: string;
   pricePerUnit: number;
+  userPrice?: number | null;
+  userPackagePrice?: number | null;
+  userPackageSize?: number | null;
+  userPackageUnit?: string | null;
   unit: string;
   packageInfo?: string | null;
   supermarket?: string | null;
   lastUpdated: string;
+  density?: number | null;
+  aliasOf?: string | null;
 }
 
 export interface Setting {

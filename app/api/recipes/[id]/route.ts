@@ -42,6 +42,16 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   return NextResponse.json(recipe);
 }
 
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const { ingredientId, quantity, unit } = await req.json();
+  const updated = await prisma.recipeIngredient.update({
+    where: { id: ingredientId },
+    data: { quantity, unit },
+  });
+  return NextResponse.json(updated);
+}
+
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   await prisma.recipe.delete({ where: { id: parseInt(id) } });
