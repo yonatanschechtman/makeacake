@@ -34,11 +34,14 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
-# Copy Prisma schema + generated client (needed for migrations at startup)
+# Copy Prisma schema + generated client
+# (client is generated to app/generated/prisma per schema.prisma output setting)
 COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder /app/app/generated ./app/generated
+
+# Install prisma CLI for running migrations at startup
+COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
 USER nextjs
 
