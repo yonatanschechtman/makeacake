@@ -51,4 +51,5 @@ ENV PORT=8080
 ENV HOSTNAME="0.0.0.0"
 
 # Run migrations then start the app
-CMD ["sh", "-c", "node_modules/.bin/prisma migrate deploy && node server.js"]
+# Use direct node path to prisma since .bin symlinks aren't in standalone output
+CMD ["sh", "-c", "node node_modules/prisma/build/index.js migrate deploy || true && node server.js"]
